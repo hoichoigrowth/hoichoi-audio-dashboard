@@ -10,7 +10,7 @@ from google.oauth2 import service_account
 
 # Sheet config
 SPREADSHEET_ID = "1kLomx3uFCnns8CKO4U1x2n4u7NxuHezUzu-doSI8GRs"
-WORKSHEET_NAME = "Audio metadata"
+WORKSHEET_NAME = "Sheet1"
 
 
 def _get_gsheet_client() -> gspread.Client:
