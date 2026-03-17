@@ -275,133 +275,116 @@ def content_trend_chart(
     return fig
 
 
-def show_grouped_bar_chart(df: pd.DataFrame, top_n: int = 20) -> go.Figure:
+def _grouped_stacked_bar(
+    labels: pd.Series,
+    event_counts: pd.Series,
+    active_users: pd.Series,
+    new_users: pd.Series,
+    title: str,
+    label_col_name: str = "show_name",
+    height: int = 500,
+) -> go.Figure:
     """
-    Horizontal grouped bar chart at show level.
-    Bar 1: Event Count
-    Bar 2: Stacked Active Users + New Users (= Distinct Users)
+    Two horizontal bars per row, side by side (grouped):
+      Bar 1 (purple): Event Count
+      Bar 2: Segmented — Active Users (blue) + New Users (green) stacked
+    Like the reference: red=events, blue=distinct users (segmented).
     """
-    plot_df = df.head(top_n).sort_values("eventCount", ascending=True)
+    from plotly.subplots import make_subplots
 
     fig = go.Figure()
 
-    # Bar 1: Event Count
+    # Events bar — its own offset group
     fig.add_trace(
         go.Bar(
-            y=plot_df["show_name"],
-            x=plot_df["eventCount"],
+            y=labels,
+            x=event_counts,
             name="Events",
             orientation="h",
-            marker=dict(color=COLORS["primary"]),
-            text=plot_df["eventCount"].apply(lambda x: f"{x:,}"),
+            marker=dict(color=COLORS["accent"]),
+            text=event_counts.apply(lambda x: f"{x:,}"),
             textposition="outside",
+            offsetgroup="events",
         )
     )
 
-    # Bar 2a: Active Users (base of stack)
+    # Active Users — part of "users" offset group
     fig.add_trace(
         go.Bar(
-            y=plot_df["show_name"],
-            x=plot_df["activeUsers"],
+            y=labels,
+            x=active_users,
             name="Active Users",
             orientation="h",
             marker=dict(color=COLORS["info"]),
+            offsetgroup="users",
         )
     )
 
-    # Bar 2b: New Users (stacked on top of active)
+    # New Users — stacked on Active Users in same "users" offset group
     fig.add_trace(
         go.Bar(
-            y=plot_df["show_name"],
-            x=plot_df["newUsers"],
+            y=labels,
+            x=new_users,
             name="New Users",
             orientation="h",
             marker=dict(color=COLORS["secondary"]),
+            offsetgroup="users",
+            base=active_users.values,
         )
     )
 
     fig.update_layout(
         **LAYOUT_DEFAULTS,
-        title=f"Top {top_n} Shows: Events vs Users",
+        title=title,
         xaxis_title="Count",
         yaxis_title="",
         barmode="group",
-        height=max(500, top_n * 40),
+        height=height,
+        bargroupgap=0.15,
     )
 
-    # Make bars 2a and 2b stack, while bar 1 is separate group
-    fig.data[1].offsetgroup = "users"
-    fig.data[2].offsetgroup = "users"
-    fig.data[2].base = plot_df["activeUsers"].values
-
     return fig
+
+
+def show_grouped_bar_chart(df: pd.DataFrame, top_n: int = 20) -> go.Figure:
+    """
+    Horizontal grouped bar chart at show level.
+    Two bars per show, side by side:
+      - Events (red/accent)
+      - Distinct Users segmented as Active (blue) + New (green)
+    """
+    plot_df = df.head(top_n).sort_values("eventCount", ascending=True)
+    return _grouped_stacked_bar(
+        labels=plot_df["show_name"],
+        event_counts=plot_df["eventCount"],
+        active_users=plot_df["activeUsers"],
+        new_users=plot_df["newUsers"],
+        title=f"Top {top_n} Shows: Events vs Distinct Users",
+        height=max(500, top_n * 50),
+    )
 
 
 def episode_drilldown_chart(df: pd.DataFrame, show_name: str) -> go.Figure:
     """
     Horizontal grouped bar for episodes within a show.
-    Sorted by episode number. Same layout: events + stacked users.
+    Sorted by episode number. Same 2-bar layout.
     """
     show_df = df[df["show_name"] == show_name].copy()
 
-    # Sort by episode number if available
     if "ep_no" in show_df.columns:
         show_df["ep_no_num"] = pd.to_numeric(show_df["ep_no"], errors="coerce").fillna(0)
         show_df = show_df.sort_values("ep_no_num", ascending=True)
     else:
         show_df = show_df.sort_values("eventCount", ascending=True)
 
-    fig = go.Figure()
-
-    # Bar 1: Events
-    fig.add_trace(
-        go.Bar(
-            y=show_df["content_title"],
-            x=show_df["eventCount"],
-            name="Events",
-            orientation="h",
-            marker=dict(color=COLORS["primary"]),
-            text=show_df["eventCount"].apply(lambda x: f"{x:,}"),
-            textposition="outside",
-        )
-    )
-
-    # Bar 2a: Active Users
-    fig.add_trace(
-        go.Bar(
-            y=show_df["content_title"],
-            x=show_df["activeUsers"],
-            name="Active Users",
-            orientation="h",
-            marker=dict(color=COLORS["info"]),
-        )
-    )
-
-    # Bar 2b: New Users (stacked on active)
-    fig.add_trace(
-        go.Bar(
-            y=show_df["content_title"],
-            x=show_df["newUsers"],
-            name="New Users",
-            orientation="h",
-            marker=dict(color=COLORS["secondary"]),
-        )
-    )
-
-    fig.update_layout(
-        **LAYOUT_DEFAULTS,
+    return _grouped_stacked_bar(
+        labels=show_df["content_title"],
+        event_counts=show_df["eventCount"],
+        active_users=show_df["activeUsers"],
+        new_users=show_df["newUsers"],
         title=f"📺 {show_name} — Episodes",
-        xaxis_title="Count",
-        yaxis_title="",
-        barmode="group",
-        height=max(400, len(show_df) * 40),
+        height=max(400, len(show_df) * 50),
     )
-
-    fig.data[1].offsetgroup = "users"
-    fig.data[2].offsetgroup = "users"
-    fig.data[2].base = show_df["activeUsers"].values
-
-    return fig
 
 
 def donut_chart(df: pd.DataFrame, label_col: str, value_col: str, title: str) -> go.Figure:
