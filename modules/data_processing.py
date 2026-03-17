@@ -223,14 +223,44 @@ def prepare_chatbot_context(
 
     # Top content
     if not content_df.empty:
+        has_show = "show_name" in content_df.columns
+        has_genre = "genre" in content_df.columns
+        header = "  content_title"
+        if has_show:
+            header += " | show_name"
+        if has_genre:
+            header += " | genre"
+        header += " | events | users | new_users | active_users"
+
         ctx.append(f"TOP CONTENT (showing top 30 of {len(content_df)}):")
-        ctx.append("  content_title | events | users | new_users | active_users")
+        ctx.append(header)
         for _, row in content_df.head(30).iterrows():
-            ctx.append(
-                f"  {row['content_title']} | {row['eventCount']:,} | "
+            line = f"  {row['content_title']}"
+            if has_show:
+                line += f" | {row.get('show_name', 'Unknown')}"
+            if has_genre:
+                line += f" | {row.get('genre', 'Unknown')}"
+            line += (
+                f" | {row['eventCount']:,} | "
                 f"{row['totalUsers']:,} | {row['newUsers']:,} | {row['activeUsers']:,}"
             )
+            ctx.append(line)
         ctx.append("")
+
+        # Show-wise summary for chatbot
+        if has_show:
+            ctx.append("SHOW-WISE SUMMARY:")
+            show_grp = content_df.groupby("show_name").agg({"eventCount": "sum", "totalUsers": "sum"}).sort_values("eventCount", ascending=False)
+            for show, row in show_grp.head(20).iterrows():
+                ctx.append(f"  {show} | {row['eventCount']:,} events | {row['totalUsers']:,} users")
+            ctx.append("")
+
+        if has_genre:
+            ctx.append("GENRE-WISE SUMMARY:")
+            genre_grp = content_df.groupby("genre").agg({"eventCount": "sum", "totalUsers": "sum"}).sort_values("eventCount", ascending=False)
+            for genre, row in genre_grp.iterrows():
+                ctx.append(f"  {genre} | {row['eventCount']:,} events | {row['totalUsers']:,} users")
+            ctx.append("")
 
     # Geography
     if not country_df.empty:

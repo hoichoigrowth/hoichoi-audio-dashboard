@@ -54,6 +54,10 @@ CHART_COLORS = [
     "#D35400", "#8E44AD", "#16A085", "#C0392B", "#2C3E50",
 ]
 
+# ─── Google Sheet Metadata ───
+GSHEET_ID = "1kLomx3uFCnns8CKO4U1x2n4u7NxuHezUzu-doSI8GRs"
+GSHEET_TAB = "Audio metadata"
+
 # ─── Cache TTL (seconds) ───
 DATA_CACHE_TTL = 3600       # 1 hour
 FILTER_CACHE_TTL = 14400    # 4 hours

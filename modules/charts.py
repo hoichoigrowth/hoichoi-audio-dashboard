@@ -53,6 +53,48 @@ def daily_trend_chart(df: pd.DataFrame, metric: str = "eventCount") -> go.Figure
     return fig
 
 
+def dual_axis_users_chart(df: pd.DataFrame) -> go.Figure:
+    """Dual Y-axis chart: Distinct Users (left axis) + New Users (right axis)."""
+    from plotly.subplots import make_subplots
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # Left axis — Distinct Users (bar)
+    fig.add_trace(
+        go.Bar(
+            x=df["date"],
+            y=df["totalUsers"],
+            name="Distinct Users",
+            marker=dict(color=COLORS["info"], opacity=0.7),
+        ),
+        secondary_y=False,
+    )
+
+    # Right axis — New Users (line)
+    fig.add_trace(
+        go.Scatter(
+            x=df["date"],
+            y=df["newUsers"],
+            mode="lines+markers",
+            name="New Users",
+            line=dict(color=COLORS["secondary"], width=3),
+            marker=dict(size=6),
+        ),
+        secondary_y=True,
+    )
+
+    fig.update_layout(
+        **LAYOUT_DEFAULTS,
+        title="Distinct Users & New Users (Daily)",
+        hovermode="x unified",
+        barmode="overlay",
+    )
+    fig.update_yaxes(title_text="Distinct Users", secondary_y=False)
+    fig.update_yaxes(title_text="New Users", secondary_y=True)
+
+    return fig
+
+
 def metric_comparison_chart(df: pd.DataFrame) -> go.Figure:
     """Multi-line chart overlaying all metrics."""
     metrics = {
