@@ -1,6 +1,6 @@
 """
 Hoichoi Audio Analytics Dashboard
-Streamlit app for Listened_ event analysis from Google Analytics 4.
+Single-page Streamlit dashboard for Listened_ event analysis from GA4.
 Enriched with audio metadata from Google Sheets (show name, genre).
 """
 
@@ -12,20 +12,18 @@ from modules.data_processing import (
     fetch_summary_metrics,
     fetch_daily_trend,
     fetch_by_content,
-    fetch_content_by_date,
     fetch_by_country,
-    fetch_content_by_country,
     get_filter_options,
     prepare_chatbot_context,
 )
 from modules.charts import (
     daily_trend_chart,
     dual_axis_users_chart,
-    top_content_bar_chart,
-    country_bar_chart,
-    country_choropleth,
-    content_trend_chart,
+    show_grouped_bar_chart,
+    episode_drilldown_chart,
     donut_chart,
+    country_choropleth,
+    country_bar_chart,
 )
 from modules.chatbot import get_chatbot_response, get_suggested_questions
 from modules.constants import COLORS, UNREGISTERED_DIMENSIONS
@@ -54,30 +52,6 @@ st.markdown(
         color: #888;
         margin-top: -10px;
     }
-    .metric-card {
-        background: linear-gradient(135deg, #1A1A2E 0%, #16213E 100%);
-        border: 1px solid #6C3483;
-        border-radius: 12px;
-        padding: 20px;
-        text-align: center;
-    }
-    .metric-value {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #6C3483;
-    }
-    .metric-label {
-        font-size: 0.85rem;
-        color: #AAA;
-        margin-top: 5px;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        padding: 10px 20px;
-        border-radius: 8px 8px 0 0;
-    }
     div[data-testid="stMetricValue"] {
         font-size: 1.8rem;
     }
@@ -90,7 +64,6 @@ st.markdown(
 # ─── Load Audio Metadata (cached) ───
 metadata_df = fetch_audio_metadata()
 
-# Extract filter options from metadata
 show_name_options = sorted(metadata_df["show_name"].dropna().unique().tolist()) if not metadata_df.empty and "show_name" in metadata_df.columns else []
 genre_options = sorted(metadata_df["genre"].dropna().unique().tolist()) if not metadata_df.empty and "genre" in metadata_df.columns else []
 
@@ -117,7 +90,7 @@ with st.sidebar:
 
     st.divider()
 
-    # ─── Show Name filter (from Google Sheets) ───
+    # Show filter
     st.markdown("### 📺 Show Filter")
     selected_shows = st.multiselect(
         "Select shows",
@@ -126,7 +99,7 @@ with st.sidebar:
         placeholder="All shows",
     )
 
-    # ─── Genre filter (from Google Sheets) ───
+    # Genre filter
     st.markdown("### 🎭 Genre Filter")
     selected_genres = st.multiselect(
         "Select genres",
@@ -137,22 +110,12 @@ with st.sidebar:
 
     st.divider()
 
-    # Fetch filter options from GA4
-    try:
-        content_options, country_options = get_filter_options(start_str, end_str)
-    except Exception:
-        content_options, country_options = [], []
-
-    # Content filter
-    st.markdown("### 🎵 Episode Filter")
-    selected_content = st.multiselect(
-        "Select episode titles",
-        options=content_options,
-        default=[],
-        placeholder="All episodes",
-    )
-
     # Country filter
+    try:
+        _, country_options = get_filter_options(start_str, end_str)
+    except Exception:
+        country_options = []
+
     st.markdown("### 🌍 Geography Filter")
     selected_countries = st.multiselect(
         "Select countries",
@@ -165,330 +128,232 @@ with st.sidebar:
 
     # Metadata status
     if not metadata_df.empty:
-        st.success(f"📋 {len(metadata_df)} episodes mapped from Google Sheets")
+        st.success(f"📋 {len(metadata_df)} episodes mapped")
     else:
         st.warning("⚠️ Could not load audio metadata")
 
-    # Refresh button
     if st.button("🔄 Refresh Data", use_container_width=True, type="primary"):
         st.cache_data.clear()
         st.rerun()
 
-    # Warning about unregistered dimensions
-    with st.expander("⚠️ Unregistered Dimensions"):
-        st.warning(
-            "The following event parameters are **not yet registered** as "
-            "GA4 custom dimensions and cannot be queried:"
-        )
-        for name, dim in UNREGISTERED_DIMENSIONS.items():
-            st.code(name)
-        st.info(
-            "Register them in GA4 Admin → Custom Definitions → "
-            "Create Custom Dimension (Event scope)."
-        )
-
     st.divider()
-    st.caption("Data may be sampled by GA4 (~2.7%)")
     st.caption(f"Period: {start_str} to {end_str}")
 
 
-# ─── Resolve show/genre filters into content_title list ───
-def resolve_metadata_filters(
-    selected_shows: list,
-    selected_genres: list,
-    selected_content: list,
-    metadata: pd.DataFrame,
-) -> list | None:
-    """
-    Combine show/genre/episode filters into a single content_title list.
-    Returns None if no filters are active (= all content).
-    """
-    filtered_episodes = None
-
-    if not metadata.empty and (selected_shows or selected_genres):
-        mask = pd.Series(True, index=metadata.index)
-        if selected_shows:
-            mask &= metadata["show_name"].isin(selected_shows)
-        if selected_genres:
-            mask &= metadata["genre"].isin(selected_genres)
-        filtered_episodes = metadata.loc[mask, "ep_name"].tolist()
-
-    # Combine with directly selected episodes
-    if selected_content:
-        if filtered_episodes is not None:
-            # Intersection: must match both metadata filter AND direct selection
-            filtered_episodes = list(set(filtered_episodes) & set(selected_content))
-        else:
-            filtered_episodes = selected_content
-
-    return filtered_episodes
+# ─── Resolve filters ───
+def resolve_metadata_filters(shows, genres, metadata):
+    if metadata.empty or (not shows and not genres):
+        return None
+    mask = pd.Series(True, index=metadata.index)
+    if shows:
+        mask &= metadata["show_name"].isin(shows)
+    if genres:
+        mask &= metadata["genre"].isin(genres)
+    episodes = metadata.loc[mask, "ep_name"].tolist()
+    return episodes if episodes else None
 
 
-resolved_content = resolve_metadata_filters(
-    selected_shows, selected_genres, selected_content, metadata_df
-)
-
-# ─── Convert filters to tuples for caching ───
+resolved_content = resolve_metadata_filters(selected_shows, selected_genres, metadata_df)
 content_filter = tuple(resolved_content) if resolved_content else None
 country_filter = tuple(selected_countries) if selected_countries else None
 
 
-# ─── Header ───
+# ═══════════════════════════════════════════════
+# HEADER
+# ═══════════════════════════════════════════════
 st.markdown('<p class="main-title">🎧 Hoichoi Audio Analytics</p>', unsafe_allow_html=True)
 st.markdown(
     f'<p class="sub-title">Listened_ Event Dashboard | {start_str} to {end_str}</p>',
     unsafe_allow_html=True,
 )
 
-# ─── Tabs ───
-tab_overview, tab_content, tab_geo, tab_detailed, tab_chat = st.tabs(
-    ["📊 Overview", "🎵 Content Analysis", "🌍 Geography", "📋 Detailed Data", "💬 Ask the Data"]
-)
+
+# ═══════════════════════════════════════════════
+# SECTION 1: OVERVIEW KPIs + DAILY CHARTS
+# ═══════════════════════════════════════════════
+try:
+    summary = fetch_summary_metrics(start_str, end_str, content_filter, country_filter)
+    daily_df = fetch_daily_trend(start_str, end_str, content_filter, country_filter)
+
+    # KPI Cards
+    k1, k2, k3, k4, k5 = st.columns(5)
+    with k1:
+        st.metric("Total Events", f"{summary['total_events']:,}")
+    with k2:
+        st.metric("Distinct Users", f"{summary['total_users']:,}")
+    with k3:
+        st.metric("New Users", f"{summary['new_users']:,}")
+    with k4:
+        st.metric("Active Users", f"{summary['active_users']:,}")
+    with k5:
+        st.metric("Avg Events/Day", f"{summary['avg_events_per_day']:,}")
+
+    st.divider()
+
+    # Two charts side by side
+    if not daily_df.empty:
+        col_left, col_right = st.columns(2)
+        with col_left:
+            st.plotly_chart(
+                daily_trend_chart(daily_df, "eventCount"),
+                use_container_width=True,
+            )
+        with col_right:
+            st.plotly_chart(
+                dual_axis_users_chart(daily_df),
+                use_container_width=True,
+            )
+    else:
+        st.warning("No data found for the selected filters and date range.")
+
+except Exception as e:
+    st.error(f"Error loading overview: {e}")
 
 
-# ═══════════════════════════════════════
-# TAB 1: OVERVIEW
-# ═══════════════════════════════════════
-with tab_overview:
-    try:
-        # Fetch data
-        summary = fetch_summary_metrics(start_str, end_str, content_filter, country_filter)
-        daily_df = fetch_daily_trend(start_str, end_str, content_filter, country_filter)
+# ═══════════════════════════════════════════════
+# SECTION 2: SHOW-LEVEL CONTENT ANALYTICS
+# ═══════════════════════════════════════════════
+st.divider()
+st.markdown("## 📺 Content Analytics — By Show")
 
-        # KPI Cards
-        k1, k2, k3, k4, k5 = st.columns(5)
-        with k1:
-            st.metric("Total Events", f"{summary['total_events']:,}")
-        with k2:
-            st.metric("Distinct Users", f"{summary['total_users']:,}")
-        with k3:
-            st.metric("New Users", f"{summary['new_users']:,}")
-        with k4:
-            st.metric("Active Users", f"{summary['active_users']:,}")
-        with k5:
-            st.metric("Avg Events/Day", f"{summary['avg_events_per_day']:,}")
+try:
+    content_df = fetch_by_content(start_str, end_str, country_filter)
+    content_df = enrich_with_metadata(content_df, metadata_df)
+
+    # Apply show/genre filters
+    if not content_df.empty:
+        if selected_shows and "show_name" in content_df.columns:
+            content_df = content_df[content_df["show_name"].isin(selected_shows)]
+        if selected_genres and "genre" in content_df.columns:
+            content_df = content_df[content_df["genre"].isin(selected_genres)]
+
+    if not content_df.empty and "show_name" in content_df.columns:
+        # Aggregate to show level
+        show_agg = content_df.groupby("show_name", as_index=False).agg({
+            "eventCount": "sum",
+            "totalUsers": "sum",
+            "activeUsers": "sum",
+            "newUsers": "sum",
+        }).sort_values("eventCount", ascending=False)
+
+        # KPIs
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            st.metric("Total Shows", show_agg["show_name"].nunique())
+        with sc2:
+            st.metric("Total Episodes", len(content_df))
+        with sc3:
+            if "genre" in content_df.columns:
+                st.metric("Genres", content_df["genre"].nunique())
+
+        # Top N selector
+        top_n = st.slider("Top N shows", 5, 40, 20, key="show_top_n")
+
+        # Show-level grouped bar: Events vs Stacked Users
+        st.plotly_chart(
+            show_grouped_bar_chart(show_agg, top_n),
+            use_container_width=True,
+        )
+
+        # Genre donut side by side
+        if "genre" in content_df.columns:
+            genre_agg = content_df.groupby("genre", as_index=False).agg({
+                "eventCount": "sum",
+                "totalUsers": "sum",
+            }).sort_values("eventCount", ascending=False)
+
+            col_g1, col_g2 = st.columns(2)
+            with col_g1:
+                st.plotly_chart(
+                    donut_chart(genre_agg, "genre", "eventCount", "Events by Genre"),
+                    use_container_width=True,
+                )
+            with col_g2:
+                st.plotly_chart(
+                    donut_chart(genre_agg, "genre", "totalUsers", "Users by Genre"),
+                    use_container_width=True,
+                )
 
         st.divider()
 
-        # Daily Trend — two charts side by side
-        if not daily_df.empty:
-            col_left, col_right = st.columns(2)
-            with col_left:
-                st.plotly_chart(
-                    daily_trend_chart(daily_df, "eventCount"),
-                    use_container_width=True,
-                )
-            with col_right:
-                st.plotly_chart(
-                    dual_axis_users_chart(daily_df),
-                    use_container_width=True,
-                )
-        else:
-            st.warning("No data found for the selected filters and date range.")
+        # ─── DRILL DOWN: Select a show to see episodes ───
+        st.markdown("### 🔍 Drill Down — Episode View")
+        show_list = show_agg["show_name"].tolist()
+        selected_show = st.selectbox(
+            "Select a show to view episodes",
+            options=show_list,
+            index=0,
+            key="drilldown_show",
+        )
 
-    except Exception as e:
-        st.error(f"Error loading overview: {e}")
-
-
-# ═══════════════════════════════════════
-# TAB 2: CONTENT ANALYSIS
-# ═══════════════════════════════════════
-with tab_content:
-    try:
-        content_df = fetch_by_content(start_str, end_str, country_filter)
-
-        # Enrich with metadata
-        content_df = enrich_with_metadata(content_df, metadata_df)
-
-        # Apply show/genre filters if metadata columns exist
-        if not content_df.empty:
-            if selected_shows and "show_name" in content_df.columns:
-                content_df = content_df[content_df["show_name"].isin(selected_shows)]
-            if selected_genres and "genre" in content_df.columns:
-                content_df = content_df[content_df["genre"].isin(selected_genres)]
-
-        if not content_df.empty:
-            st.markdown(f"### 📊 {len(content_df)} Content Titles Found")
-
-            # Show/Genre summary if available
-            if "show_name" in content_df.columns:
-                shows_count = content_df["show_name"].nunique()
-                genres_count = content_df["genre"].nunique() if "genre" in content_df.columns else 0
-                sc1, sc2 = st.columns(2)
-                with sc1:
-                    st.metric("Unique Shows", shows_count)
-                with sc2:
-                    st.metric("Unique Genres", genres_count)
-
-            # Top content bar chart
-            col_bar, col_opts = st.columns([4, 1])
-            with col_opts:
-                content_metric = st.selectbox(
-                    "Metric",
-                    ["eventCount", "totalUsers", "newUsers", "activeUsers"],
-                    format_func=lambda x: {
-                        "eventCount": "Total Events",
-                        "totalUsers": "Distinct Users",
-                        "newUsers": "New Users",
-                        "activeUsers": "Active Users",
-                    }[x],
-                    key="content_metric",
-                )
-                top_n = st.slider("Top N", 5, 30, 15, key="content_top_n")
-            with col_bar:
-                st.plotly_chart(
-                    top_content_bar_chart(content_df, content_metric, top_n),
-                    use_container_width=True,
-                )
-
-            st.divider()
-
-            # ─── Show-wise aggregation ───
-            if "show_name" in content_df.columns:
-                st.markdown("### 📺 Show-wise Breakdown")
-                show_agg = content_df.groupby("show_name", as_index=False).agg({
-                    "eventCount": "sum",
-                    "totalUsers": "sum",
-                    "activeUsers": "sum",
-                    "newUsers": "sum",
-                }).sort_values("eventCount", ascending=False)
-                show_agg["events_per_user"] = (show_agg["eventCount"] / show_agg["activeUsers"].replace(0, 1)).round(2)
-
-                col_show_chart, col_show_donut = st.columns([3, 2])
-                with col_show_chart:
-                    st.plotly_chart(
-                        top_content_bar_chart(
-                            show_agg.rename(columns={"show_name": "content_title"}),
-                            content_metric, min(top_n, len(show_agg))
-                        ),
-                        use_container_width=True,
-                    )
-                with col_show_donut:
-                    st.plotly_chart(
-                        donut_chart(
-                            show_agg.head(10).rename(columns={"show_name": "content_title"}),
-                            "content_title", content_metric,
-                            f"Top Shows by {content_metric}",
-                        ),
-                        use_container_width=True,
-                    )
-
-                st.divider()
-
-            # ─── Genre-wise aggregation ───
-            if "genre" in content_df.columns:
-                st.markdown("### 🎭 Genre-wise Breakdown")
-                genre_agg = content_df.groupby("genre", as_index=False).agg({
-                    "eventCount": "sum",
-                    "totalUsers": "sum",
-                    "activeUsers": "sum",
-                    "newUsers": "sum",
-                }).sort_values("eventCount", ascending=False)
-
-                col_genre_bar, col_genre_donut = st.columns([3, 2])
-                with col_genre_bar:
-                    st.plotly_chart(
-                        top_content_bar_chart(
-                            genre_agg.rename(columns={"genre": "content_title"}),
-                            content_metric, len(genre_agg)
-                        ),
-                        use_container_width=True,
-                    )
-                with col_genre_donut:
-                    st.plotly_chart(
-                        donut_chart(
-                            genre_agg.rename(columns={"genre": "content_title"}),
-                            "content_title", content_metric,
-                            f"Genre Share by {content_metric}",
-                        ),
-                        use_container_width=True,
-                    )
-
-                st.divider()
-
-            # Content trend comparison
-            st.markdown("### 📈 Content Trend Comparison")
-            top_titles = content_df["content_title"].head(20).tolist()
-            selected_titles = st.multiselect(
-                "Select titles to compare",
-                options=top_titles,
-                default=top_titles[:3],
-                key="content_trend_titles",
+        if selected_show:
+            st.plotly_chart(
+                episode_drilldown_chart(content_df, selected_show),
+                use_container_width=True,
             )
 
-            if selected_titles:
-                trend_df = fetch_content_by_date(
-                    start_str, end_str, tuple(selected_titles), country_filter
-                )
-                if not trend_df.empty:
-                    st.plotly_chart(
-                        content_trend_chart(trend_df, selected_titles, content_metric),
-                        use_container_width=True,
-                    )
+            # Episode data table for the selected show
+            show_episodes = content_df[content_df["show_name"] == selected_show].copy()
+            if "ep_no" in show_episodes.columns:
+                show_episodes["ep_no_num"] = pd.to_numeric(show_episodes["ep_no"], errors="coerce").fillna(0)
+                show_episodes = show_episodes.sort_values("ep_no_num")
+                show_episodes = show_episodes.drop(columns=["ep_no_num"])
 
-            st.divider()
-
-            # Full data table
-            st.markdown("### 📋 Full Content Data")
-            table_cols = {
-                "content_title": "Content Title",
+            display_cols = {
+                "content_title": "Episode Name",
+                "ep_no": "Ep #",
                 "eventCount": "Events",
                 "totalUsers": "Distinct Users",
-                "newUsers": "New Users",
                 "activeUsers": "Active Users",
-                "events_per_user": "Events/User",
+                "newUsers": "New Users",
+                "genre": "Genre",
             }
-            if "show_name" in content_df.columns:
-                table_cols["show_name"] = "Show Name"
-            if "genre" in content_df.columns:
-                table_cols["genre"] = "Genre"
-            if "ep_no" in content_df.columns:
-                table_cols["ep_no"] = "Episode #"
-
-            display_df = content_df.rename(columns=table_cols)
+            display_ep = show_episodes.rename(
+                columns={k: v for k, v in display_cols.items() if k in show_episodes.columns}
+            )
             st.dataframe(
-                display_df,
+                display_ep,
                 use_container_width=True,
-                height=500,
+                height=min(400, max(200, len(show_episodes) * 40)),
                 column_config={
                     "Events": st.column_config.NumberColumn(format="%d"),
                     "Distinct Users": st.column_config.NumberColumn(format="%d"),
-                    "New Users": st.column_config.NumberColumn(format="%d"),
                     "Active Users": st.column_config.NumberColumn(format="%d"),
-                    "Events/User": st.column_config.NumberColumn(format="%.2f"),
+                    "New Users": st.column_config.NumberColumn(format="%d"),
                 },
             )
 
-            # Download button
-            csv = content_df.to_csv(index=False)
-            st.download_button(
-                "📥 Download Content Data (CSV)",
-                csv,
-                "hoichoi_content_data.csv",
-                "text/csv",
-                use_container_width=True,
-            )
-        else:
-            st.warning("No content data found for the selected filters.")
+        st.divider()
 
-    except Exception as e:
-        st.error(f"Error loading content analysis: {e}")
+        # Full data download
+        csv = content_df.to_csv(index=False)
+        st.download_button(
+            "📥 Download Full Content Data (CSV)",
+            csv,
+            "hoichoi_content_data.csv",
+            "text/csv",
+            use_container_width=True,
+        )
+
+    else:
+        st.warning("No content data found for the selected filters.")
+
+except Exception as e:
+    st.error(f"Error loading content analytics: {e}")
 
 
-# ═══════════════════════════════════════
-# TAB 3: GEOGRAPHY
-# ═══════════════════════════════════════
-with tab_geo:
+# ═══════════════════════════════════════════════
+# SECTION 3: GEOGRAPHY (collapsed by default)
+# ═══════════════════════════════════════════════
+st.divider()
+with st.expander("🌍 Geography Breakdown", expanded=False):
     try:
         country_df = fetch_by_country(start_str, end_str, content_filter)
 
         if not country_df.empty:
-            st.markdown(f"### 🌍 {len(country_df)} Countries")
-
-            # Metric selector
             geo_metric = st.selectbox(
                 "Metric",
-                ["eventCount", "totalUsers", "newUsers", "activeUsers"],
+                ["eventCount", "totalUsers", "activeUsers", "newUsers"],
                 format_func=lambda x: {
                     "eventCount": "Total Events",
                     "totalUsers": "Distinct Users",
@@ -498,13 +363,11 @@ with tab_geo:
                 key="geo_metric",
             )
 
-            # Choropleth
             st.plotly_chart(
                 country_choropleth(country_df, geo_metric),
                 use_container_width=True,
             )
 
-            # Bar chart and donut side by side
             col_bar, col_donut = st.columns([3, 2])
             with col_bar:
                 st.plotly_chart(
@@ -514,36 +377,12 @@ with tab_geo:
             with col_donut:
                 st.plotly_chart(
                     donut_chart(
-                        country_df.head(8),
-                        "country",
-                        geo_metric,
+                        country_df.head(8), "country", geo_metric,
                         f"Share by Country ({geo_metric})",
                     ),
                     use_container_width=True,
                 )
 
-            st.divider()
-
-            # Content x Country
-            st.markdown("### 🎵 Top Content by Country")
-            content_country_df = fetch_content_by_country(
-                start_str, end_str, content_filter, country_filter
-            )
-            if not content_country_df.empty:
-                # Enrich with metadata
-                content_country_df = enrich_with_metadata(content_country_df, metadata_df)
-                pivot_df = content_country_df.pivot_table(
-                    index="content_title",
-                    columns="country",
-                    values="eventCount",
-                    aggfunc="sum",
-                    fill_value=0,
-                )
-                pivot_df["Total"] = pivot_df.sum(axis=1)
-                pivot_df = pivot_df.sort_values("Total", ascending=False).head(20)
-                st.dataframe(pivot_df, use_container_width=True, height=500)
-
-            # Download
             csv = country_df.to_csv(index=False)
             st.download_button(
                 "📥 Download Geography Data (CSV)",
@@ -553,117 +392,25 @@ with tab_geo:
                 use_container_width=True,
             )
         else:
-            st.warning("No geography data found for the selected filters.")
+            st.warning("No geography data found.")
 
     except Exception as e:
         st.error(f"Error loading geography: {e}")
 
 
-# ═══════════════════════════════════════
-# TAB 4: DETAILED DATA
-# ═══════════════════════════════════════
-with tab_detailed:
-    try:
-        st.markdown("### 📋 Content x Date Detailed View")
-        st.info("This shows every content title x date combination with full metrics, enriched with show & genre.")
-
-        detail_df = fetch_content_by_date(
-            start_str, end_str, content_filter, country_filter
-        )
-
-        if not detail_df.empty:
-            # Enrich with metadata
-            detail_df = enrich_with_metadata(detail_df, metadata_df)
-
-            # Apply show/genre filters
-            if selected_shows and "show_name" in detail_df.columns:
-                detail_df = detail_df[detail_df["show_name"].isin(selected_shows)]
-            if selected_genres and "genre" in detail_df.columns:
-                detail_df = detail_df[detail_df["genre"].isin(selected_genres)]
-
-            # Add computed columns
-            detail_df["events_per_user"] = (
-                detail_df["eventCount"] / detail_df["activeUsers"].replace(0, 1)
-            ).round(2)
-
-            # Summary stats
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
-                st.metric("Total Rows", f"{len(detail_df):,}")
-            with c2:
-                st.metric("Unique Episodes", f"{detail_df['content_title'].nunique():,}")
-            with c3:
-                shows = detail_df["show_name"].nunique() if "show_name" in detail_df.columns else "N/A"
-                st.metric("Unique Shows", shows)
-            with c4:
-                st.metric("Date Range", f"{detail_df['date'].min().strftime('%b %d')} - {detail_df['date'].max().strftime('%b %d')}")
-
-            st.divider()
-
-            # Display
-            detail_rename = {
-                "content_title": "Episode",
-                "date": "Date",
-                "eventCount": "Events",
-                "totalUsers": "Distinct Users",
-                "newUsers": "New Users",
-                "activeUsers": "Active Users",
-                "events_per_user": "Events/User",
-            }
-            if "show_name" in detail_df.columns:
-                detail_rename["show_name"] = "Show Name"
-            if "genre" in detail_df.columns:
-                detail_rename["genre"] = "Genre"
-            if "ep_no" in detail_df.columns:
-                detail_rename["ep_no"] = "Episode #"
-
-            display_detail = detail_df.rename(columns=detail_rename)
-
-            st.dataframe(
-                display_detail,
-                use_container_width=True,
-                height=600,
-                column_config={
-                    "Date": st.column_config.DateColumn(format="YYYY-MM-DD"),
-                    "Events": st.column_config.NumberColumn(format="%d"),
-                    "Distinct Users": st.column_config.NumberColumn(format="%d"),
-                    "New Users": st.column_config.NumberColumn(format="%d"),
-                    "Active Users": st.column_config.NumberColumn(format="%d"),
-                    "Events/User": st.column_config.NumberColumn(format="%.2f"),
-                },
-            )
-
-            # Download
-            csv = detail_df.to_csv(index=False)
-            st.download_button(
-                "📥 Download Full Detail (CSV)",
-                csv,
-                "hoichoi_content_date_detail.csv",
-                "text/csv",
-                use_container_width=True,
-            )
-        else:
-            st.warning("No detailed data found for the selected filters.")
-
-    except Exception as e:
-        st.error(f"Error loading detailed data: {e}")
-
-
-# ═══════════════════════════════════════
-# TAB 5: CHATBOT
-# ═══════════════════════════════════════
-with tab_chat:
-    st.markdown("### 💬 Ask the Data")
+# ═══════════════════════════════════════════════
+# SECTION 4: CHATBOT (collapsed by default)
+# ═══════════════════════════════════════════════
+st.divider()
+with st.expander("💬 Ask the Data", expanded=False):
     st.markdown(
         "Ask questions about your Hoichoi audio listening data. "
         "The AI analyst has access to all the dashboard data."
     )
 
-    # Initialize chat history
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    # Prepare context from current data
     try:
         chat_summary = fetch_summary_metrics(start_str, end_str, content_filter, country_filter)
         chat_daily = fetch_daily_trend(start_str, end_str, content_filter, country_filter)
@@ -674,10 +421,9 @@ with tab_chat:
             chat_summary, chat_daily, chat_content, chat_country
         )
     except Exception:
-        data_context = "Error loading data context. Please check your GA4 connection."
+        data_context = "Error loading data context."
 
-    # Suggested questions
-    with st.expander("💡 Suggested Questions", expanded=False):
+    with st.container():
         suggestions = get_suggested_questions()
         cols = st.columns(2)
         for i, q in enumerate(suggestions):
@@ -685,28 +431,21 @@ with tab_chat:
                 if st.button(q, key=f"suggest_{i}", use_container_width=True):
                     st.session_state.pending_question = q
 
-    st.divider()
-
-    # Display chat history
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Chat input
     prompt = st.chat_input("Ask a question about your listening data...")
 
-    # Check for pending question from suggestions
     if hasattr(st.session_state, "pending_question") and st.session_state.pending_question:
         prompt = st.session_state.pending_question
         st.session_state.pending_question = None
 
     if prompt:
-        # Add user message
         st.session_state.chat_history.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Get AI response
         with st.chat_message("assistant"):
             with st.spinner("Analyzing data..."):
                 response = get_chatbot_response(
@@ -714,12 +453,10 @@ with tab_chat:
                 )
                 st.markdown(response)
 
-        # Save assistant response
         st.session_state.chat_history.append(
             {"role": "assistant", "content": response}
         )
 
-    # Clear chat button
     if st.session_state.chat_history:
         if st.button("🗑️ Clear Chat", use_container_width=True):
             st.session_state.chat_history = []
