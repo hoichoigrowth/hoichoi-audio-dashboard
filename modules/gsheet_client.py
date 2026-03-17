@@ -1,85 +1,146 @@
 """
 Google Sheets client for fetching audio metadata.
 Maps episode names to show names and genres.
+Bulletproof: tries multiple auth strategies, retries, and detailed error logging.
 """
 
 import streamlit as st
 import pandas as pd
-import gspread
-from google.oauth2 import service_account
+import traceback
 
 # Sheet config
 SPREADSHEET_ID = "1kLomx3uFCnns8CKO4U1x2n4u7NxuHezUzu-doSI8GRs"
 WORKSHEET_NAME = "Sheet1"
 
+# Public CSV export URL as ultimate fallback
+GSHEET_CSV_URL = (
+    f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}"
+    f"/gviz/tq?tqx=out:csv&sheet={WORKSHEET_NAME}"
+)
 
-def _get_gsheet_client() -> gspread.Client:
-    """Create authenticated gspread client using the same service account."""
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets.readonly",
-        "https://www.googleapis.com/auth/drive.readonly",
+
+def _get_service_account_info() -> dict:
+    """Extract service account info from Streamlit secrets."""
+    try:
+        return dict(st.secrets["gcp_service_account"])
+    except Exception:
+        return {}
+
+
+def _fetch_via_gspread(sa_info: dict) -> pd.DataFrame:
+    """Primary method: use gspread with service account."""
+    import gspread
+    from google.oauth2 import service_account
+
+    # Try multiple scope sets
+    scope_options = [
+        ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+        [
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly",
+        ],
+        [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ],
     ]
-    credentials = service_account.Credentials.from_service_account_info(
-        st.secrets["gcp_service_account"],
-        scopes=scopes,
-    )
-    return gspread.authorize(credentials)
+
+    last_err = None
+    for scopes in scope_options:
+        try:
+            credentials = service_account.Credentials.from_service_account_info(
+                sa_info, scopes=scopes
+            )
+            client = gspread.authorize(credentials)
+            spreadsheet = client.open_by_key(SPREADSHEET_ID)
+            worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
+            records = worksheet.get_all_records()
+            return pd.DataFrame(records)
+        except Exception as e:
+            last_err = e
+            continue
+
+    raise last_err or Exception("All gspread scope attempts failed")
+
+
+def _fetch_via_csv() -> pd.DataFrame:
+    """Fallback: fetch via public CSV export URL (sheet must be 'anyone with link')."""
+    return pd.read_csv(GSHEET_CSV_URL)
+
+
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize column names to standard: show_name, ep_no, ep_name, genre."""
+    col_mapping = {}
+    for col in df.columns:
+        cl = col.strip().lower()
+        if "show" in cl and "name" in cl:
+            col_mapping[col] = "show_name"
+        elif cl in ("ep no.", "ep no", "ep_no", "episode no", "episode no.", "episode number"):
+            col_mapping[col] = "ep_no"
+        elif cl in ("ep. name", "ep name", "ep_name", "episode name", "episode_name"):
+            col_mapping[col] = "ep_name"
+        elif "genre" in cl:
+            col_mapping[col] = "genre"
+
+    df = df.rename(columns=col_mapping)
+
+    # Keep only needed columns
+    keep = [c for c in ["show_name", "ep_no", "ep_name", "genre"] if c in df.columns]
+    df = df[keep]
+
+    # Clean strings
+    for col in df.columns:
+        df[col] = df[col].astype(str).str.strip()
+
+    # Drop empty episode names
+    if "ep_name" in df.columns:
+        df = df[df["ep_name"].str.len() > 0]
+        df = df[df["ep_name"] != "nan"]
+
+    return df.reset_index(drop=True)
 
 
 @st.cache_data(ttl=14400, show_spinner="Loading audio metadata from Google Sheets...")
 def fetch_audio_metadata() -> pd.DataFrame:
     """
-    Fetch audio metadata from Google Sheets.
-    Returns DataFrame with columns:
-        show_name, ep_no, ep_name, genre
+    Fetch audio metadata with multiple fallback strategies:
+    1. gspread with service account (tries multiple scopes)
+    2. Public CSV export URL
+    Returns empty DataFrame only if everything fails.
     """
+    errors = []
+
+    # Strategy 1: gspread with service account
+    sa_info = _get_service_account_info()
+    if sa_info:
+        try:
+            df = _fetch_via_gspread(sa_info)
+            df = _normalize_columns(df)
+            if not df.empty:
+                return df
+        except Exception as e:
+            errors.append(f"gspread: {e}")
+
+    # Strategy 2: Public CSV fallback
     try:
-        client = _get_gsheet_client()
-        spreadsheet = client.open_by_key(SPREADSHEET_ID)
-        worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
-        records = worksheet.get_all_records()
-
-        df = pd.DataFrame(records)
-
-        # Normalize column names
-        col_mapping = {}
-        for col in df.columns:
-            col_lower = col.strip().lower()
-            if "show" in col_lower and "name" in col_lower:
-                col_mapping[col] = "show_name"
-            elif col_lower in ("ep no.", "ep no", "ep_no", "episode no", "episode no."):
-                col_mapping[col] = "ep_no"
-            elif col_lower in ("ep. name", "ep name", "ep_name", "episode name", "episode_name"):
-                col_mapping[col] = "ep_name"
-            elif "genre" in col_lower:
-                col_mapping[col] = "genre"
-
-        df = df.rename(columns=col_mapping)
-
-        # Keep only the columns we need
-        keep_cols = [c for c in ["show_name", "ep_no", "ep_name", "genre"] if c in df.columns]
-        df = df[keep_cols]
-
-        # Clean up
-        for col in df.columns:
-            if df[col].dtype == object:
-                df[col] = df[col].astype(str).str.strip()
-
-        # Drop empty rows
-        if "ep_name" in df.columns:
-            df = df[df["ep_name"].str.len() > 0]
-
-        return df
-
+        df = _fetch_via_csv()
+        df = _normalize_columns(df)
+        if not df.empty:
+            return df
     except Exception as e:
-        st.warning(f"Could not load audio metadata from Google Sheets: {e}")
-        return pd.DataFrame()
+        errors.append(f"CSV fallback: {e}")
+
+    # All failed
+    error_detail = " | ".join(errors) if errors else "No service account found in secrets"
+    st.warning(f"Could not load audio metadata. Errors: {error_detail}")
+    return pd.DataFrame()
 
 
 def enrich_with_metadata(ga_df: pd.DataFrame, metadata_df: pd.DataFrame) -> pd.DataFrame:
     """
     Left-join GA4 data with audio metadata.
     Matches GA4 content_title to sheet's ep_name.
+    Safe: returns original df if anything goes wrong.
     """
     if metadata_df.empty or ga_df.empty:
         return ga_df
@@ -90,22 +151,23 @@ def enrich_with_metadata(ga_df: pd.DataFrame, metadata_df: pd.DataFrame) -> pd.D
     if "ep_name" not in metadata_df.columns:
         return ga_df
 
-    # Merge on content_title == ep_name
-    enriched = ga_df.merge(
-        metadata_df,
-        left_on="content_title",
-        right_on="ep_name",
-        how="left",
-    )
+    try:
+        enriched = ga_df.merge(
+            metadata_df,
+            left_on="content_title",
+            right_on="ep_name",
+            how="left",
+        )
 
-    # Drop the duplicate ep_name column
-    if "ep_name" in enriched.columns:
-        enriched = enriched.drop(columns=["ep_name"])
+        if "ep_name" in enriched.columns:
+            enriched = enriched.drop(columns=["ep_name"])
 
-    # Fill missing metadata
-    if "show_name" in enriched.columns:
-        enriched["show_name"] = enriched["show_name"].fillna("Unknown")
-    if "genre" in enriched.columns:
-        enriched["genre"] = enriched["genre"].fillna("Unknown")
+        if "show_name" in enriched.columns:
+            enriched["show_name"] = enriched["show_name"].fillna("Unknown")
+        if "genre" in enriched.columns:
+            enriched["genre"] = enriched["genre"].fillna("Unknown")
 
-    return enriched
+        return enriched
+
+    except Exception:
+        return ga_df
