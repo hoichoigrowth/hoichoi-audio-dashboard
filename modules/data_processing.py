@@ -21,7 +21,7 @@ def fetch_summary_metrics(
         start_date=start_date,
         end_date=end_date,
         dimensions=["date"],
-        metrics=["eventCount", "totalUsers", "newUsers", "activeUsers"],
+        metrics=["eventCount", "totalUsers", "activeUsers"],
         content_titles=list(content_titles) if content_titles else None,
         countries=list(countries) if countries else None,
     )
@@ -36,11 +36,13 @@ def fetch_summary_metrics(
             "avg_events_per_day": 0,
         }
 
+    total_users = int(df["totalUsers"].sum())
+    active_users = int(df["activeUsers"].sum())
     return {
         "total_events": int(df["eventCount"].sum()),
-        "total_users": int(df["totalUsers"].sum()),
-        "new_users": int(df["newUsers"].sum()),
-        "active_users": int(df["activeUsers"].sum()),
+        "total_users": total_users,
+        "new_users": max(total_users - active_users, 0),
+        "active_users": active_users,
         "days": len(df),
         "avg_events_per_day": int(df["eventCount"].sum() / max(len(df), 1)),
     }
@@ -54,14 +56,17 @@ def fetch_daily_trend(
     countries: tuple | None = None,
 ) -> pd.DataFrame:
     """Daily breakdown of Listened_ events."""
-    return run_report(
+    df = run_report(
         start_date=start_date,
         end_date=end_date,
         dimensions=["date"],
-        metrics=["eventCount", "totalUsers", "newUsers", "activeUsers"],
+        metrics=["eventCount", "totalUsers", "activeUsers"],
         content_titles=list(content_titles) if content_titles else None,
         countries=list(countries) if countries else None,
     )
+    if not df.empty:
+        df["newUsers"] = (df["totalUsers"] - df["activeUsers"]).clip(lower=0)
+    return df
 
 
 @st.cache_data(ttl=DATA_CACHE_TTL, show_spinner="Fetching content data...")
@@ -75,11 +80,12 @@ def fetch_by_content(
         start_date=start_date,
         end_date=end_date,
         dimensions=["customEvent:content_title"],
-        metrics=["eventCount", "totalUsers", "newUsers", "activeUsers"],
+        metrics=["eventCount", "totalUsers", "activeUsers"],
         countries=list(countries) if countries else None,
     )
 
     if not df.empty:
+        df["newUsers"] = (df["totalUsers"] - df["activeUsers"]).clip(lower=0)
         df = df.sort_values("eventCount", ascending=False).reset_index(drop=True)
         df["events_per_user"] = (df["eventCount"] / df["activeUsers"].replace(0, 1)).round(2)
 
@@ -94,14 +100,17 @@ def fetch_content_by_date(
     countries: tuple | None = None,
 ) -> pd.DataFrame:
     """Content x Date breakdown."""
-    return run_report(
+    df = run_report(
         start_date=start_date,
         end_date=end_date,
         dimensions=["customEvent:content_title", "date"],
-        metrics=["eventCount", "totalUsers", "newUsers", "activeUsers"],
+        metrics=["eventCount", "totalUsers", "activeUsers"],
         content_titles=list(content_titles) if content_titles else None,
         countries=list(countries) if countries else None,
     )
+    if not df.empty:
+        df["newUsers"] = (df["totalUsers"] - df["activeUsers"]).clip(lower=0)
+    return df
 
 
 @st.cache_data(ttl=DATA_CACHE_TTL, show_spinner="Fetching geography data...")
@@ -115,11 +124,12 @@ def fetch_by_country(
         start_date=start_date,
         end_date=end_date,
         dimensions=["country"],
-        metrics=["eventCount", "totalUsers", "newUsers", "activeUsers"],
+        metrics=["eventCount", "totalUsers", "activeUsers"],
         content_titles=list(content_titles) if content_titles else None,
     )
 
     if not df.empty:
+        df["newUsers"] = (df["totalUsers"] - df["activeUsers"]).clip(lower=0)
         total = df["eventCount"].sum()
         df = df.sort_values("eventCount", ascending=False).reset_index(drop=True)
         df["pct_share"] = (df["eventCount"] / total * 100).round(1)
@@ -135,14 +145,17 @@ def fetch_content_by_country(
     countries: tuple | None = None,
 ) -> pd.DataFrame:
     """Content x Country breakdown."""
-    return run_report(
+    df = run_report(
         start_date=start_date,
         end_date=end_date,
         dimensions=["customEvent:content_title", "country"],
-        metrics=["eventCount", "totalUsers", "newUsers", "activeUsers"],
+        metrics=["eventCount", "totalUsers", "activeUsers"],
         content_titles=list(content_titles) if content_titles else None,
         countries=list(countries) if countries else None,
     )
+    if not df.empty:
+        df["newUsers"] = (df["totalUsers"] - df["activeUsers"]).clip(lower=0)
+    return df
 
 
 @st.cache_data(ttl=FILTER_CACHE_TTL, show_spinner="Loading filter options...")
