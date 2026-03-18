@@ -69,7 +69,7 @@ def _fetch_via_csv() -> pd.DataFrame:
 
 
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Normalize column names to standard: show_name, ep_no, ep_name, genre."""
+    """Normalize column names to standard: show_name, ep_no, ep_name, genre, primary_genre."""
     col_mapping = {}
     for col in df.columns:
         cl = col.strip().lower()
@@ -79,13 +79,15 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
             col_mapping[col] = "ep_no"
         elif cl in ("ep. name", "ep name", "ep_name", "episode name", "episode_name"):
             col_mapping[col] = "ep_name"
+        elif "primary" in cl and "genre" in cl:
+            col_mapping[col] = "primary_genre"
         elif "genre" in cl:
             col_mapping[col] = "genre"
 
     df = df.rename(columns=col_mapping)
 
     # Keep only needed columns
-    keep = [c for c in ["show_name", "ep_no", "ep_name", "genre"] if c in df.columns]
+    keep = [c for c in ["show_name", "ep_no", "ep_name", "genre", "primary_genre"] if c in df.columns]
     df = df[keep]
 
     # Clean strings
@@ -166,6 +168,8 @@ def enrich_with_metadata(ga_df: pd.DataFrame, metadata_df: pd.DataFrame) -> pd.D
             enriched["show_name"] = enriched["show_name"].fillna("Unknown")
         if "genre" in enriched.columns:
             enriched["genre"] = enriched["genre"].fillna("Unknown")
+        if "primary_genre" in enriched.columns:
+            enriched["primary_genre"] = enriched["primary_genre"].fillna("Unknown")
 
         return enriched
 

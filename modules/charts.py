@@ -168,6 +168,45 @@ def top_content_bar_chart(
     return fig
 
 
+def top_content_bar_chart_generic(
+    df: pd.DataFrame, label_col: str, metric: str, title: str, top_n: int = 15
+) -> go.Figure:
+    """Horizontal bar chart: any label column vs any metric column."""
+    metric_labels = {
+        "eventCount": "Total Events",
+        "totalUsers": "Distinct Users",
+        "newUsers": "New Users",
+        "activeUsers": "Active Users",
+    }
+
+    plot_df = df.head(top_n).sort_values(metric, ascending=True)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=plot_df[metric],
+            y=plot_df[label_col],
+            orientation="h",
+            marker=dict(
+                color=plot_df[metric],
+                colorscale=[[0, COLORS["info"]], [1, COLORS["primary"]]],
+            ),
+            text=plot_df[metric].apply(lambda x: f"{x:,}"),
+            textposition="outside",
+        )
+    )
+
+    fig.update_layout(
+        **LAYOUT_DEFAULTS,
+        title=title,
+        xaxis_title=metric_labels.get(metric, metric),
+        yaxis_title="",
+        height=max(300, min(top_n, len(plot_df)) * 35),
+    )
+
+    return fig
+
+
 def country_bar_chart(
     df: pd.DataFrame, metric: str = "eventCount", top_n: int = 15
 ) -> go.Figure:
@@ -283,55 +322,56 @@ def _grouped_stacked_bar(
     title: str,
     label_col_name: str = "show_name",
     height: int = 500,
+    metric_mode: str = "both",
 ) -> go.Figure:
     """
-    Two horizontal bars per row, side by side (grouped):
-      Bar 1 (purple): Event Count
-      Bar 2: Segmented — Active Users (blue) + New Users (green) stacked
-    Like the reference: red=events, blue=distinct users (segmented).
+    Horizontal bar chart with configurable metric display.
+    metric_mode:
+      "both"        — Events bar + Distinct Users bar (Active + New stacked)
+      "event_count"  — Events bar only
+      "unique_users" — Distinct Users bar only (Active + New stacked)
     """
-    from plotly.subplots import make_subplots
-
     fig = go.Figure()
 
-    # Events bar — its own offset group
-    fig.add_trace(
-        go.Bar(
-            y=labels,
-            x=event_counts,
-            name="Events",
-            orientation="h",
-            marker=dict(color=COLORS["accent"]),
-            text=event_counts.apply(lambda x: f"{x:,}"),
-            textposition="outside",
-            offsetgroup="events",
+    if metric_mode in ("both", "event_count"):
+        fig.add_trace(
+            go.Bar(
+                y=labels,
+                x=event_counts,
+                name="Events",
+                orientation="h",
+                marker=dict(color=COLORS["accent"]),
+                text=event_counts.apply(lambda x: f"{x:,}"),
+                textposition="outside",
+                offsetgroup="events",
+            )
         )
-    )
 
-    # Active Users — part of "users" offset group
-    fig.add_trace(
-        go.Bar(
-            y=labels,
-            x=active_users,
-            name="Active Users",
-            orientation="h",
-            marker=dict(color=COLORS["info"]),
-            offsetgroup="users",
+    if metric_mode in ("both", "unique_users"):
+        total_users = active_users + new_users
+        fig.add_trace(
+            go.Bar(
+                y=labels,
+                x=active_users,
+                name="Active Users",
+                orientation="h",
+                marker=dict(color=COLORS["info"]),
+                text=total_users.apply(lambda x: f"{x:,}"),
+                textposition="outside",
+                offsetgroup="users",
+            )
         )
-    )
-
-    # New Users — stacked on Active Users in same "users" offset group
-    fig.add_trace(
-        go.Bar(
-            y=labels,
-            x=new_users,
-            name="New Users",
-            orientation="h",
-            marker=dict(color=COLORS["secondary"]),
-            offsetgroup="users",
-            base=active_users.values,
+        fig.add_trace(
+            go.Bar(
+                y=labels,
+                x=new_users,
+                name="New Users",
+                orientation="h",
+                marker=dict(color=COLORS["secondary"]),
+                offsetgroup="users",
+                base=active_users.values,
+            )
         )
-    )
 
     fig.update_layout(
         **LAYOUT_DEFAULTS,
@@ -346,12 +386,10 @@ def _grouped_stacked_bar(
     return fig
 
 
-def show_grouped_bar_chart(df: pd.DataFrame, top_n: int = 20) -> go.Figure:
+def show_grouped_bar_chart(df: pd.DataFrame, top_n: int = 20, metric_mode: str = "both") -> go.Figure:
     """
     Horizontal grouped bar chart at show level.
-    Two bars per show, side by side:
-      - Events (red/accent)
-      - Distinct Users segmented as Active (blue) + New (green)
+    metric_mode controls which bars are displayed.
     """
     plot_df = df.head(top_n).sort_values("eventCount", ascending=True)
     return _grouped_stacked_bar(
@@ -361,19 +399,21 @@ def show_grouped_bar_chart(df: pd.DataFrame, top_n: int = 20) -> go.Figure:
         new_users=plot_df["newUsers"],
         title=f"Top {top_n} Shows: Events vs Distinct Users",
         height=max(500, top_n * 50),
+        metric_mode=metric_mode,
     )
 
 
-def episode_drilldown_chart(df: pd.DataFrame, show_name: str) -> go.Figure:
+def episode_drilldown_chart(df: pd.DataFrame, show_name: str, metric_mode: str = "both") -> go.Figure:
     """
     Horizontal grouped bar for episodes within a show.
-    Sorted by episode number. Same 2-bar layout.
+    Episodes sorted ascending by ep number (Ep 1 at top). metric_mode controls bars displayed.
     """
     show_df = df[df["show_name"] == show_name].copy()
 
     if "ep_no" in show_df.columns:
         show_df["ep_no_num"] = pd.to_numeric(show_df["ep_no"], errors="coerce").fillna(0)
-        show_df = show_df.sort_values("ep_no_num", ascending=True)
+        # Sort descending so Plotly renders Ep 1 at the TOP of the horizontal bar chart
+        show_df = show_df.sort_values("ep_no_num", ascending=False)
     else:
         show_df = show_df.sort_values("eventCount", ascending=True)
 
@@ -384,6 +424,7 @@ def episode_drilldown_chart(df: pd.DataFrame, show_name: str) -> go.Figure:
         new_users=show_df["newUsers"],
         title=f"📺 {show_name} — Episodes",
         height=max(400, len(show_df) * 50),
+        metric_mode=metric_mode,
     )
 
 

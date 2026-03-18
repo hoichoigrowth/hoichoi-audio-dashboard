@@ -25,6 +25,7 @@ from modules.charts import (
     donut_chart,
     country_choropleth,
     country_bar_chart,
+    top_content_bar_chart_generic,
 )
 from modules.chatbot import get_chatbot_response, get_suggested_questions
 from modules.constants import COLORS
@@ -217,12 +218,60 @@ try:
 
     if not content_df.empty and "show_name" in content_df.columns:
 
+        # ─── Content Analytics header ───
+        st.markdown("## 📺 Content Analytics")
+
+        # Genre filter options
+        chart_genre_options = sorted(content_df["genre"].dropna().unique().tolist()) if "genre" in content_df.columns else []
+        has_primary_genre = "primary_genre" in content_df.columns
+        primary_genre_options = sorted(content_df["primary_genre"].dropna().unique().tolist()) if has_primary_genre else []
+        chart_df = content_df.copy()
+
         # ─── If NO show selected: show the show-level view ───
         if not active_show:
-            st.markdown("## 📺 Content Analytics — By Show")
             st.caption("👆 Click on a show bar to drill down into its episodes")
 
-            show_agg = content_df.groupby("show_name", as_index=False).agg({
+            # ─── Persistent filters: inline ───
+            fc1, fc2, fc3, fc4 = st.columns([1, 1, 1, 1])
+            with fc1:
+                top_n = st.slider("Top N shows", 5, 40, 20, key="show_top_n")
+            with fc2:
+                chart_metric_mode = st.selectbox(
+                    "📊 Metric",
+                    options=["both", "event_count", "unique_users"],
+                    format_func=lambda x: {
+                        "both": "Events + Users",
+                        "event_count": "Event Count",
+                        "unique_users": "Unique Users",
+                    }[x],
+                    index=0,
+                    key="chart_metric_mode",
+                )
+            with fc3:
+                chart_genre_filter = st.multiselect(
+                    "🎭 Genre",
+                    options=chart_genre_options,
+                    default=[],
+                    placeholder="All genres",
+                    key="chart_genre_filter",
+                )
+            with fc4:
+                chart_primary_genre_filter = st.multiselect(
+                    "🏷️ Primary Genre",
+                    options=primary_genre_options,
+                    default=[],
+                    placeholder="All primary genres",
+                    key="chart_primary_genre_filter",
+                ) if has_primary_genre else []
+
+            # Apply filters
+            if chart_genre_filter and "genre" in chart_df.columns:
+                chart_df = chart_df[chart_df["genre"].isin(chart_genre_filter)]
+            if chart_primary_genre_filter and has_primary_genre:
+                chart_df = chart_df[chart_df["primary_genre"].isin(chart_primary_genre_filter)]
+
+            # Show KPIs
+            show_agg = chart_df.groupby("show_name", as_index=False).agg({
                 "eventCount": "sum",
                 "totalUsers": "sum",
                 "activeUsers": "sum",
@@ -233,15 +282,37 @@ try:
             with sc1:
                 st.metric("Total Shows", show_agg["show_name"].nunique())
             with sc2:
-                st.metric("Total Episodes", len(content_df))
+                st.metric("Total Episodes", len(chart_df))
             with sc3:
-                if "genre" in content_df.columns:
-                    st.metric("Genres", content_df["genre"].nunique())
+                if "genre" in chart_df.columns:
+                    st.metric("Genres", chart_df["genre"].nunique())
 
-            top_n = st.slider("Top N shows", 5, 40, 20, key="show_top_n")
+            # ─── Primary Genre bar chart ───
+            if has_primary_genre and not chart_primary_genre_filter:
+                pg_agg = chart_df.groupby("primary_genre", as_index=False).agg({
+                    "eventCount": "sum",
+                    "totalUsers": "sum",
+                }).sort_values("eventCount", ascending=False)
+
+                if not pg_agg.empty:
+                    col_pg1, col_pg2 = st.columns(2)
+                    with col_pg1:
+                        st.plotly_chart(
+                            top_content_bar_chart_generic(
+                                pg_agg, "primary_genre", "eventCount", "Events by Primary Genre", top_n=15
+                            ),
+                            use_container_width=True,
+                        )
+                    with col_pg2:
+                        st.plotly_chart(
+                            top_content_bar_chart_generic(
+                                pg_agg, "primary_genre", "totalUsers", "Users by Primary Genre", top_n=15
+                            ),
+                            use_container_width=True,
+                        )
 
             # Show bar chart with click selection
-            show_chart = show_grouped_bar_chart(show_agg, top_n)
+            show_chart = show_grouped_bar_chart(show_agg, top_n, metric_mode=chart_metric_mode)
             event = st.plotly_chart(
                 show_chart,
                 use_container_width=True,
@@ -252,15 +323,14 @@ try:
             # Handle click: extract show name from selection
             if event and event.selection and event.selection.points:
                 clicked_point = event.selection.points[0]
-                # The y value is the show name (horizontal bar)
                 clicked_show = clicked_point.get("y", None)
                 if clicked_show and clicked_show in show_agg["show_name"].values:
                     st.session_state.selected_show = clicked_show
                     st.rerun()
 
             # Genre donuts
-            if "genre" in content_df.columns:
-                genre_agg = content_df.groupby("genre", as_index=False).agg({
+            if "genre" in chart_df.columns and not chart_genre_filter:
+                genre_agg = chart_df.groupby("genre", as_index=False).agg({
                     "eventCount": "sum",
                     "totalUsers": "sum",
                 }).sort_values("eventCount", ascending=False)
@@ -279,22 +349,49 @@ try:
 
         # ─── If show IS selected: episode drill-down ───
         else:
-            st.markdown(f"## 📺 {active_show} — Episode Breakdown")
-            if st.button("⬅️ Back to All Shows", type="primary"):
-                st.session_state.selected_show = None
-                st.rerun()
+            st.markdown(f"### 📺 {active_show} — Episode Breakdown")
 
-            # Episode drilldown chart
+            # ─── Persistent filters for drill-down ───
+            dc1, dc2, dc3 = st.columns([2, 2, 2])
+            with dc1:
+                if st.button("⬅️ Back to All Shows", type="primary", use_container_width=True):
+                    st.session_state.selected_show = None
+                    st.rerun()
+            with dc2:
+                chart_metric_mode = st.selectbox(
+                    "📊 Metric",
+                    options=["both", "event_count", "unique_users"],
+                    format_func=lambda x: {
+                        "both": "Events + Users",
+                        "event_count": "Event Count",
+                        "unique_users": "Unique Users",
+                    }[x],
+                    index=0,
+                    key="chart_metric_mode",
+                )
+            with dc3:
+                chart_genre_filter = st.multiselect(
+                    "🎭 Genre",
+                    options=chart_genre_options,
+                    default=[],
+                    placeholder="All genres",
+                    key="chart_genre_filter",
+                )
+
+            if chart_genre_filter and "genre" in chart_df.columns:
+                chart_df = chart_df[chart_df["genre"].isin(chart_genre_filter)]
+
+            # Episode drilldown chart (with same metric mode)
             st.plotly_chart(
-                episode_drilldown_chart(content_df, active_show),
+                episode_drilldown_chart(chart_df, active_show, metric_mode=chart_metric_mode),
                 use_container_width=True,
             )
 
             # Episode data table
-            show_episodes_df = content_df[content_df["show_name"] == active_show].copy()
+            show_episodes_df = chart_df[chart_df["show_name"] == active_show].copy()
             if "ep_no" in show_episodes_df.columns:
                 show_episodes_df["ep_no_num"] = pd.to_numeric(show_episodes_df["ep_no"], errors="coerce").fillna(0)
-                show_episodes_df = show_episodes_df.sort_values("ep_no_num")
+                show_episodes_df = show_episodes_df.sort_values("ep_no_num", ascending=True)
                 show_episodes_df = show_episodes_df.drop(columns=["ep_no_num"])
 
             # Episode KPIs
