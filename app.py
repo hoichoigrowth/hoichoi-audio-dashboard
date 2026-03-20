@@ -62,14 +62,11 @@ genre_options = sorted(metadata_df["genre"].dropna().unique().tolist()) if not m
 
 # ─── Sidebar ───
 with st.sidebar:
-    st.markdown("## 🎧 Hoichoi Audio")
-    st.markdown("**Listened_ Event Dashboard**")
-    st.divider()
+    st.markdown("**🎧 Hoichoi Audio** · Listened_ Dashboard")
 
-    st.markdown("### 📅 Date Range")
-    col1, col2 = st.columns(2)
     default_end = datetime.now().date()
     default_start = default_end - timedelta(days=30)
+    col1, col2 = st.columns(2)
     with col1:
         start_date = st.date_input("Start", value=default_start)
     with col2:
@@ -77,39 +74,26 @@ with st.sidebar:
     start_str = start_date.strftime("%Y-%m-%d")
     end_str = end_date.strftime("%Y-%m-%d")
 
-    st.divider()
+    selected_shows = st.multiselect("📺 Show", options=show_name_options, default=[], placeholder="All shows")
+    selected_genres = st.multiselect("🎭 Genre", options=genre_options, default=[], placeholder="All genres")
+    selected_countries = st.multiselect("🌍 Country", options=st.session_state.get("country_options", []), default=[], placeholder="All countries")
 
-    st.markdown("### 📺 Show Filter")
-    selected_shows = st.multiselect("Select shows", options=show_name_options, default=[], placeholder="All shows")
-
-    st.markdown("### 🎭 Genre Filter")
-    selected_genres = st.multiselect("Select genres", options=genre_options, default=[], placeholder="All genres")
-
-    st.divider()
-
-    st.markdown("### 🌍 Geography Filter")
-    selected_countries = st.multiselect("Select countries", options=st.session_state.get("country_options", []), default=[], placeholder="All countries")
-
-    st.divider()
-
-    # Show currently selected show
     if st.session_state.selected_show:
         st.info(f"📺 Drilled into: **{st.session_state.selected_show}**")
-        if st.button("✕ Clear Show Selection", use_container_width=True):
+        if st.button("✕ Clear Selection", use_container_width=True):
             st.session_state.selected_show = None
             st.rerun()
-        st.divider()
 
-    if not metadata_df.empty:
-        st.success(f"📋 {len(metadata_df)} episodes mapped")
-
-    if st.button("🔄 Refresh Data", use_container_width=True, type="primary"):
-        st.cache_data.clear()
-        st.session_state.selected_show = None
-        st.session_state.geo_loaded = False
-        st.rerun()
-
-    st.caption(f"Period: {start_str} to {end_str}")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🔄 Refresh", use_container_width=True, type="primary"):
+            st.cache_data.clear()
+            st.session_state.selected_show = None
+            st.session_state.geo_loaded = False
+            st.rerun()
+    with c2:
+        if not metadata_df.empty:
+            st.caption(f"📋 {len(metadata_df)} eps")
 
 
 # ─── Resolve filters ───
