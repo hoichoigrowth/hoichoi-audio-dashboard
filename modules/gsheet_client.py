@@ -71,23 +71,38 @@ def _fetch_via_csv() -> pd.DataFrame:
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize column names to standard: show_name, ep_no, ep_name, genre, primary_genre."""
     col_mapping = {}
+    # Track already-assigned target names to avoid duplicates
+    assigned = set()
     for col in df.columns:
         cl = col.strip().lower()
+        target = None
         if "show" in cl and "name" in cl:
-            col_mapping[col] = "show_name"
+            target = "show_name"
+        elif cl in ("x",):
+            # Sheet uses "X" as the show name column
+            target = "show_name"
         elif cl in ("ep no.", "ep no", "ep_no", "episode no", "episode no.", "episode number"):
-            col_mapping[col] = "ep_no"
+            target = "ep_no"
         elif cl in ("ep. name", "ep name", "ep_name", "episode name", "episode_name"):
-            col_mapping[col] = "ep_name"
+            target = "ep_name"
         elif "primary" in cl and "genre" in cl:
-            col_mapping[col] = "primary_genre"
+            target = "primary_genre"
         elif "genre" in cl:
-            col_mapping[col] = "genre"
+            target = "genre"
+
+        if target and target not in assigned:
+            col_mapping[col] = target
+            assigned.add(target)
 
     df = df.rename(columns=col_mapping)
 
-    # Keep only needed columns
-    keep = [c for c in ["show_name", "ep_no", "ep_name", "genre", "primary_genre"] if c in df.columns]
+    # Keep only needed columns (deduplicate to be safe)
+    keep = []
+    seen = set()
+    for c in df.columns:
+        if c in ("show_name", "ep_no", "ep_name", "genre", "primary_genre") and c not in seen:
+            keep.append(c)
+            seen.add(c)
     df = df[keep]
 
     # Clean strings

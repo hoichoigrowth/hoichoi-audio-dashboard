@@ -14,7 +14,6 @@ from modules.data_processing import (
     fetch_by_content,
     fetch_content_by_date,
     fetch_by_country,
-    get_filter_options,
     prepare_chatbot_context,
 )
 from modules.charts import (
@@ -88,13 +87,8 @@ with st.sidebar:
 
     st.divider()
 
-    try:
-        _, country_options = get_filter_options(start_str, end_str)
-    except Exception:
-        country_options = []
-
     st.markdown("### 🌍 Geography Filter")
-    selected_countries = st.multiselect("Select countries", options=country_options, default=[], placeholder="All countries")
+    selected_countries = st.multiselect("Select countries", options=st.session_state.get("country_options", []), default=[], placeholder="All countries")
 
     st.divider()
 
@@ -112,6 +106,7 @@ with st.sidebar:
     if st.button("🔄 Refresh Data", use_container_width=True, type="primary"):
         st.cache_data.clear()
         st.session_state.selected_show = None
+        st.session_state.geo_loaded = False
         st.rerun()
 
     st.caption(f"Period: {start_str} to {end_str}")
@@ -452,40 +447,55 @@ except Exception as e:
 # SECTION 3: GEOGRAPHY (collapsed)
 # ═══════════════════════════════════════════════
 st.divider()
-with st.expander("🌍 Geography Breakdown", expanded=False):
-    try:
-        country_df = fetch_by_country(start_str, end_str, content_filter_for_overview)
 
-        if not country_df.empty:
-            geo_metric = st.selectbox(
-                "Metric",
-                ["eventCount", "totalUsers", "activeUsers", "newUsers"],
-                format_func=lambda x: {
-                    "eventCount": "Total Events",
-                    "totalUsers": "Distinct Users",
-                    "newUsers": "New Users",
-                    "activeUsers": "Active Users",
-                }[x],
-                key="geo_metric",
-            )
+# Lazy-load geography: only fetch when user clicks button
+if "geo_loaded" not in st.session_state:
+    st.session_state.geo_loaded = False
 
-            st.plotly_chart(country_choropleth(country_df, geo_metric), use_container_width=True)
+with st.expander("🌍 Geography Breakdown", expanded=st.session_state.geo_loaded):
+    if not st.session_state.geo_loaded:
+        if st.button("📊 Load Geography Data", use_container_width=True, key="load_geo"):
+            st.session_state.geo_loaded = True
+            st.rerun()
+        st.caption("Click above to load geography data (saves load time)")
+    else:
+        try:
+            country_df = fetch_by_country(start_str, end_str, content_filter_for_overview)
 
-            col_bar, col_donut = st.columns([3, 2])
-            with col_bar:
-                st.plotly_chart(country_bar_chart(country_df, geo_metric), use_container_width=True)
-            with col_donut:
-                st.plotly_chart(
-                    donut_chart(country_df.head(8), "country", geo_metric, f"Share by Country ({geo_metric})"),
-                    use_container_width=True,
+            # Populate sidebar country filter for next rerun
+            if not country_df.empty:
+                st.session_state.country_options = country_df["country"].tolist()
+
+            if not country_df.empty:
+                geo_metric = st.selectbox(
+                    "Metric",
+                    ["eventCount", "totalUsers", "activeUsers", "newUsers"],
+                    format_func=lambda x: {
+                        "eventCount": "Total Events",
+                        "totalUsers": "Distinct Users",
+                        "newUsers": "New Users",
+                        "activeUsers": "Active Users",
+                    }[x],
+                    key="geo_metric",
                 )
 
-            csv = country_df.to_csv(index=False)
-            st.download_button("📥 Download Geography Data (CSV)", csv, "hoichoi_geography_data.csv", "text/csv", use_container_width=True)
-        else:
-            st.warning("No geography data found.")
-    except Exception as e:
-        st.error(f"Error loading geography: {e}")
+                st.plotly_chart(country_choropleth(country_df, geo_metric), use_container_width=True)
+
+                col_bar, col_donut = st.columns([3, 2])
+                with col_bar:
+                    st.plotly_chart(country_bar_chart(country_df, geo_metric), use_container_width=True)
+                with col_donut:
+                    st.plotly_chart(
+                        donut_chart(country_df.head(8), "country", geo_metric, f"Share by Country ({geo_metric})"),
+                        use_container_width=True,
+                    )
+
+                csv = country_df.to_csv(index=False)
+                st.download_button("📥 Download Geography Data (CSV)", csv, "hoichoi_geography_data.csv", "text/csv", use_container_width=True)
+            else:
+                st.warning("No geography data found.")
+        except Exception as e:
+            st.error(f"Error loading geography: {e}")
 
 
 # ═══════════════════════════════════════════════
@@ -497,16 +507,6 @@ with st.expander("💬 Ask the Data", expanded=False):
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
-
-    try:
-        chat_summary = fetch_summary_metrics(start_str, end_str, content_filter, country_filter)
-        chat_daily = fetch_daily_trend(start_str, end_str, content_filter, country_filter)
-        chat_content = fetch_by_content(start_str, end_str, country_filter)
-        chat_content = enrich_with_metadata(chat_content, metadata_df)
-        chat_country = fetch_by_country(start_str, end_str, content_filter)
-        data_context = prepare_chatbot_context(chat_summary, chat_daily, chat_content, chat_country)
-    except Exception:
-        data_context = "Error loading data context."
 
     suggestions = get_suggested_questions()
     cols = st.columns(2)
@@ -531,6 +531,16 @@ with st.expander("💬 Ask the Data", expanded=False):
             st.markdown(prompt)
         with st.chat_message("assistant"):
             with st.spinner("Analyzing data..."):
+                # Lazy-load chatbot context only when user actually asks
+                try:
+                    chat_summary = fetch_summary_metrics(start_str, end_str, content_filter, country_filter)
+                    chat_daily = fetch_daily_trend(start_str, end_str, content_filter, country_filter)
+                    chat_content = fetch_by_content(start_str, end_str, country_filter)
+                    chat_content = enrich_with_metadata(chat_content, metadata_df)
+                    chat_country = fetch_by_country(start_str, end_str, content_filter)
+                    data_context = prepare_chatbot_context(chat_summary, chat_daily, chat_content, chat_country)
+                except Exception:
+                    data_context = "Error loading data context."
                 response = get_chatbot_response(prompt, data_context, st.session_state.chat_history[:-1])
                 st.markdown(response)
         st.session_state.chat_history.append({"role": "assistant", "content": response})
